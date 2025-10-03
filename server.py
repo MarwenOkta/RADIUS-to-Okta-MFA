@@ -17,21 +17,24 @@ logger = logging.getLogger(__name__)
 class RadiusServer(Server):
     def __init__(self, *args, **kwargs):
         self.okta = OktaAPI(url=args[0], key=args[1])
-
         super().__init__(**kwargs)
 
     def auth_handler(self, pkt):
         user_name = pkt["User-Name"][0][
-                    pkt["User-Name"][0].find("\\") + 1 if pkt["User-Name"][0].find("\\") > 0 else 0:]
+            pkt["User-Name"][0].find("\\") + 1 if pkt["User-Name"][0].find("\\") > 0 else 0:
+        ]
 
         logger.info("Received an authentication request for {}.".format(user_name))
         logger.debug("Attributes: ")
         for attr in pkt.keys():
             logger.debug("%s: %s" % (attr, pkt[attr]))
 
-        reply = self.CreateReplyPacket(pkt, **{
-            "Proxy-State": pkt["Proxy-State"]
-        })
+        # --- Make Proxy-State optional ---
+        reply_kwargs = {}
+        if "Proxy-State" in pkt:
+            reply_kwargs["Proxy-State"] = pkt["Proxy-State"]
+
+        reply = self.CreateReplyPacket(pkt, **reply_kwargs)
         reply.code = AccessReject
 
         try:
@@ -39,6 +42,7 @@ class RadiusServer(Server):
                 u = self.okta.get_user_by_samaccountname(user_name)
             else:
                 u = self.okta.get_user_id(user_name)
+
             f = self.okta.get_user_push_factor(u)
             if f is not None:
                 push = self.okta.push_verify(u, f["id"])
@@ -50,12 +54,13 @@ class RadiusServer(Server):
             else:
                 logger.warning("{} does not have an Okta push factor enrolled!".format(user_name))
         except Exception as e:
-            logger.exception("There was a problem with the Okta MFA", e)
+            # logger.exception already includes the stack trace
+            logger.exception("There was a problem with the Okta MFA: %s", e)
 
         self.SendReplyPacket(pkt.fd, reply)
 
     def HandleAuthPacket(self, pkt):
-        thread = threading.Thread(target=self.auth_handler, args=(pkt, ))
+        thread = threading.Thread(target=self.auth_handler, args=(pkt,))
         thread.start()
 
 
